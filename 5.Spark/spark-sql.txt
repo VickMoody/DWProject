@@ -1,0 +1,65 @@
+from pyspark.sql import SparkSession
+from pyspark.sql import Window
+from pyspark.sql.functions import sum, bround
+
+#window = Window.partitionBy("assignedto")
+
+spark = SparkSession \
+    .builder \
+    .appName("Python Spark SQL basic example") \
+    .config("spark.some.config.option", "some-value") \
+    .getOrCreate()
+	
+account = spark.read.option("header", "true").csv("DTAccounts.csv")
+city = spark.read.option("header", "true").csv("DTCity.csv")
+donation = spark.read.option("header", "true").csv("FTDonations.csv")
+
+account.createOrReplaceTempView("accounts")
+city.createOrReplaceTempView("cities")
+donation.createOrReplaceTempView("donations")
+
+lvlyear = spark.sql("SELECT donations.donorclass, donations.year, \
+sum(donations.givings) AS givings, avg(donations.avggivings) AS avggivings \
+FROM donations GROUP BY donations.donorclass, donations.year")
+
+nameyear = spark.sql("SELECT accounts.assignedto, donations.year, \
+sum(donations.givings) AS givings,avg(donations.avggivings) AS avggivings \
+FROM donations, accounts WHERE donations.accountid = accounts.accountid \
+GROUP BY accounts.assignedto, donations.year")
+
+stat = spark.sql("SELECT cities.state, cities.country, \
+sum(donations.givings) AS givings, avg(donations.avggivings) AS avggivings \
+FROM donations, cities WHERE donations.city = cities.city \
+GROUP BY cities.state, cities.country")
+
+lvlyear.createOrReplaceTempView("lvlyears")
+nameyear.createOrReplaceTempView("nameyears")
+stat.createOrReplaceTempView("stats")
+
+#Q1 on OLAP
+nameyear.select("assignedto","year",bround("givings").alias("givings")).groupBy("assignedto","year").sum().orderBy("assignedto","year").show()
+#Q2 on OLAP
+lvlyear.select("donorclass","year",bround("givings").alias("givings")).orderBy("donorclass","year").show()
+#Q3 on OLAP
+nameyear.select("assignedto","year",bround("givings").alias("yearly"),\
+bround(sum("givings").over(Window.partitionBy("assignedto"))).alias("totperacc"), \
+bround(nameyear["givings"]/sum("givings").over(Window.partitionBy("assignedto")),2).alias("perc")).orderBy("assignedto").show()
+#Q4 on OLAP 
+donation.groupBy("year").agg(sum("givings").alias("tot")).orderBy("tot", ascending=False).show()
+#Q5 on OLAP
+stat.groupBy("state","country").agg(sum("givings").alias("tot")).orderBy("tot", ascending=False).show(10)
+
+NQ1 = spark.sql("select country, sum(givings) from stats group by country order by sum(givings) desc limit 10")
+NQ2 = spark.sql("select assignedto, sum(givings) from nameyears group by assignedto order by sum(givings) desc limit 10")
+NQ3 = spark.sql("select donorclass, sum(givings) from lvlyears group by donorclass order by sum(givings) desc")
+NQ4 = spark.sql("select city, year, count(*) as Total_Donation_Count \
+from donations group by city, year order by count(*) desc limit 20")
+NQ5 = spark.sql("select state, country, avggivings from stats order by avggivings desc limit 10")
+
+NQ1.show()
+NQ2.show()
+NQ3.show()
+NQ4.show()
+NQ5.show()
+
+spark.stop()
